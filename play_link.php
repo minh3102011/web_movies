@@ -1,6 +1,7 @@
 <?php
 header('Content-Type: text/html; charset=utf-8');
 header('Access-Control-Allow-Origin: *');
+
 $movieDir = 'movies_link'; // Changed from 'movies' to 'movies_link'
 $ignoreFolders = ['harrypotter 2', 'secret'];
 $movieList = [];
@@ -172,14 +173,31 @@ $activeLink = '';
 $linkType = '';
 
 if ($playLink) {
+    // Kiểm tra Content-Type từ server
+    $headers = @get_headers($playLink, 1);
+    $contentType = isset($headers['Content-Type']) ? $headers['Content-Type'] : '';
     $ext = strtolower(pathinfo(parse_url($playLink, PHP_URL_PATH), PATHINFO_EXTENSION));
+
     $validExtensions = ['mp4', 'mkv', 'avi', 'webm', 'm3u8'];
     if (in_array($ext, $validExtensions)) {
         $validLink = true;
         $activeLink = $playLink;
         $linkType = $ext === 'm3u8' ? 'hls' : 'video';
+    } elseif ($contentType) {
+        // Xử lý dựa trên Content-Type nếu không có phần mở rộng
+        if (strpos($contentType, 'application/x-mpegURL') !== false || strpos($contentType, 'application/vnd.apple.mpegurl') !== false) {
+            $validLink = true;
+            $activeLink = $playLink;
+            $linkType = 'hls';
+        } elseif (strpos($contentType, 'video/') !== false) {
+            $validLink = true;
+            $activeLink = $playLink;
+            $linkType = 'video';
+        } else {
+            $errorMessage = '❌ Link không hợp lệ (Content-Type không được hỗ trợ: ' . htmlspecialchars($contentType) . ')';
+        }
     } else {
-        $errorMessage = '❌ Link không hợp lệ (chỉ hỗ trợ: mp4, mkv, avi, webm, m3u8)';
+        $errorMessage = '❌ Link không hợp lệ (không xác định được định dạng)';
     }
 }
 
@@ -226,7 +244,7 @@ if ($currentFolder) {
 <html lang="vi">
 
 <head>
-    <meta charset="UTF-8">
+    <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0"> <!-- Added for mobile responsiveness -->
     <title>Quản lý phim thư mục</title>
     <script src="https://cdn.tailwindcss.com"></script>
@@ -498,7 +516,7 @@ if ($currentFolder) {
                     </div>
                 <?php endif; ?>
 
-                <form method="POST" class="space-y-6" accept-charset="UTF-8">
+                <form method="POST" class="space-y-6" accept-charset="utf-8">
                     <div>
                         <label class="block mb-2 text-sm font-medium text-slate-300">📁 Chọn thư mục đã có:</label>
                         <select name="selected_folder" class="block w-full p-3 rounded-lg bg-slate-700 border-slate-600 text-slate-100 placeholder-slate-400 focus:ring-2 focus:ring-sky-500 focus:border-sky-500 shadow-sm transition-colors duration-200">
@@ -662,7 +680,7 @@ if ($currentFolder) {
                                         <button onclick="toggleThumbnailForm('<?php echo urlencode($movie['filePath']); ?>')" class="text-xs font-medium text-emerald-500 hover:text-emerald-400 transition-colors duration-150 hover:underline" aria-label="Thêm thumbnail">Add Thumbnail</button>
                                     <?php endif; ?>
                                 </div>
-                                <form id="form-<?php echo urlencode($movie['filePath']); ?>" method="POST" class="hidden mt-2 sm:mt-3 space-y-2 bg-slate-700/50 p-2 sm:p-3 rounded-md" accept-charset="UTF-8">
+                                <form id="form-<?php echo urlencode($movie['filePath']); ?>" method="POST" class="hidden mt-2 sm:mt-3 space-y-2 bg-slate-700/50 p-2 sm:p-3 rounded-md" accept-charset="utf-8">
                                     <input type="hidden" name="file_path" value="<?php echo htmlspecialchars($movie['filePath'] ?? ''); ?>">
                                     <input type="hidden" name="add_thumbnail" value="1">
                                     <input name="thumb_url" placeholder="Link thumbnail..." class="w-full p-1.5 rounded bg-slate-600 border-slate-500 text-white text-xs placeholder-slate-400 focus:ring-1 focus:ring-sky-500 focus:border-sky-500">
@@ -762,6 +780,24 @@ if ($currentFolder) {
                         console.error('HLS error:', data);
                         videoElement.dataset.loaded = 'true';
                         setupPreview(600);
+                        if (data.fatal) {
+                            let message = 'Lỗi phát video: ';
+                            switch (data.type) {
+                                case Hls.ErrorTypes.NETWORK_ERROR:
+                                    message += 'Lỗi mạng. Link có thể đã hết hạn hoặc server không phản hồi.';
+                                    hls.startLoad();
+                                    break;
+                                case Hls.ErrorTypes.MEDIA_ERROR:
+                                    message += 'Lỗi media. Đang thử khắc phục...';
+                                    hls.recoverMediaError();
+                                    break;
+                                default:
+                                    message += data.details;
+                                    hls.destroy();
+                                    break;
+                            }
+                            alert(message);
+                        }
                     });
                 } else if (!isHls) {
                     let sourceTag = videoElement.querySelector('source');
@@ -914,6 +950,24 @@ if ($currentFolder) {
                             <video id="videoPlayer" class="w-full h-full" controls autoplay></video>
                             <script>
                                 if (Hls.isSupported()) {
+                                    const hls = new Hls({
+                                        lowLatencyMode: true,
+                                        enableWorker: true,
+                                        backBufferLength: 90,
+                                        maxBufferLength: 30,
+                                        maxMaxBufferLength: 60,
+                                        maxBufferSize: 60 * 1000 * 1000,
+                                        autoStartLoad: true,
+                                        debug: false,
+                                        xhrSetup: function(xhr, url) {
+                                            // Thêm các header cần thiết
+                                            xhr.setRequestHeader('Referer', window.location.href);
+                                            xhr.setRequestHeader('User-Agent', navigator.userAgent);
+                                        }
+                                    });
+                                    hls.loadSource(<?php echo json_encode($activeLink); ?>);
+                                    hls.attachMedia(videoPlayer);
+                                    videoPlayer.hlsInstance = hls;
                                     const hlsPlayer = new Hls();
                                     hlsPlayer.loadSource(<?php echo json_encode($activeLink); ?>);
                                     hlsPlayer.attachMedia(document.getElementById('videoPlayer'));
